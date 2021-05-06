@@ -6,6 +6,7 @@ import os
 from subprocess import run
 from logging import getLogger
 
+import numpy as np
 from numpy import arange, linspace
 from pandas import DataFrame, DatetimeIndex, MultiIndex
 
@@ -1602,3 +1603,735 @@ Model.read_i_check.__doc__ = "{}".format(read_i_check.__doc__)
 Model.read_tlevel.__doc__ = "{}".format(read_tlevel.__doc__)
 Model.read_alevel.__doc__ = "{}".format(read_alevel.__doc__)
 Model.read_solutes.__doc__ = "{}".format(read_solute.__doc__)
+
+class Model_OWHM:
+    """
+    Basic Phydrus model container.
+
+    Parameters
+    ----------
+    exe_name: str
+        String with the path to the Hydrus-1D executable.
+    ws_name: str
+        String with the workspace name. Folder is created if it does not
+        exist.
+    name: str, optional
+        String with the name of the model.
+    description: str, optional
+        String with the description of the model.
+    length_unit: str, optional
+        length units to use in the simulation. Options are "mm", "cm",
+        and "m". Defaults to "cm".
+    time_unit: str, optional
+        time unit to use in the simulation, options are "seconds",
+        "minutes", "hours", "days, "years". Defaults to "days".
+    mass_units: str, optional
+        Mass units to use in the simulation, Options are "mmol".
+        Defaults to "mmol". Only used when transport process is added.
+    print_screen: bool, optional
+        Print the results to the screen during code execution.
+
+    Examples
+    --------
+    >>> import phydrus as ps
+    >>> ws = "example"
+    >>> exe = os.path.join(os.getcwd(), "hydrus")
+
+    >>> ml = ps.Model(exe_name=exe, ws_name=ws, mass_units="mmol",
+    >>>               time_unit="min", length_unit="cm")
+
+    """
+
+    def __init__(self, exe_name, ws_name, name="model", description=None,
+                 length_unit="cm", time_unit="days", mass_units="mmol",
+                 print_screen=False):
+
+        # Set logger to log all events
+        self.logger = getLogger(__name__)
+        self.set_executable(exe_name)
+
+        if not os.path.exists(ws_name):
+            os.mkdir(ws_name)
+            self.logger.info("Directory %s created", ws_name)
+
+        self.ws_name = ws_name
+
+        self.name = name
+        self.description = description
+
+        # Attributes for the physical properties of the model
+        self.profile = None
+        self.materials = None
+        self.obs_nodes = []
+        self.solutes = []
+
+        self.atmosphere_info = None
+        self.atmosphere = None
+
+        self.drains = None
+        self.times = None
+
+        # Attributes for the information on the processes
+        self.water_flow = None
+        self.solute_transport = None
+        self.heat_transport = None
+        self.heat_parameters = None
+        self.root_uptake = None
+        self.root_growth = None
+
+        self.basic_info = {
+            "iVer": "4",
+            "Hed": f"Created with Pydrus version {__version__}",
+            "LUnit": length_unit,
+            "TUnit": time_unit,
+        }
+
+        self.plots = Plots(ml=self)
+
+    @property
+    def n_materials(self):
+        if self.materials is None:
+            return 0
+        else:
+            return self.materials.index.size
+
+    @property
+    def n_solutes(self):
+        return len(self.solutes)
+
+    @property
+    def n_layers(self):
+        if self.profile is None:
+            return 0
+        else:
+            return len(self.profile.loc[:, "Lay"].unique())
+
+    def set_executable(self, exe_name):
+        """
+        Method to set the path to the Hydrus-1D executable.
+
+        Parameters
+        ----------
+        exe_name: str
+            String with the path to the Hydrus-1D executable.
+
+        Examples
+        --------
+        >>> exe = os.path.join(os.getcwd(), 'hydrus.exe')
+        >>> ml.set_executable(exe)
+
+        Notes
+        -----
+        This method may also be used to re-set the path to the executable.
+
+        """
+        # Store the hydrus executable and the project workspace
+        if not os.path.exists(exe_name):
+            self.logger.error("Path to the Hydrus-1D executable seems "
+                              "incorrect, please check the path to the "
+                              "executable.")
+            raise FileNotFoundError
+        else:
+            self.exe_name = exe_name
+
+    def add_profile(self, profile):
+        """
+        Method to add the soil profile to the model.
+
+        """
+        self.profile = profile
+
+    def add_material(self, material):
+        """
+        Method to add a material to the model.
+
+        Parameters
+        ----------
+        material: pandas.DataFrame
+            Pandas DataFrame with the parameter names as columns and the
+            values for each material as one row. The index for each is the
+            reference number for each material and must be unique. The
+            number of columns depends on the water flow model that has been
+            chosen.
+
+        Examples
+        --------
+        >>> m = pd.DataFrame({1: [0.08, 0.3421, 0.03, 5, 1, -0.5]}, index=[1],
+                             columns=["thr", "ths", "Alfa", "n" "Ks", "l"])
+        >>> ml.add_material(m)
+
+        See Also
+        --------
+        phydrus.Model.get_empty_material_df
+
+        """
+        if material.columns.size != \
+                self.get_empty_material_df().columns.size:
+            raise TypeError("the number of parameters (columns) describing "
+                            "the material does not match the water flow "
+                            "model. Please check the number of parameters.")
+        else:
+            self.materials = material
+
+
+    def add_waterflow(self, model=0, maxit=10, tolth=1e-3, tolh=1, ha=1e-6,
+                      hb=1e4, linitw=-1):
+        """
+        Method to add a water_flow module to the model.
+
+        Parameters
+        ----------
+        model: int, optional
+            Soil hydraulic properties model:
+            0 = van Genuchten"s [1980] model with 6 parameters.
+             1 = van Genuchten"s [1980] model with air-entry value of -2 cm
+            and with 6 parameters.
+            2 = Brooks and Corey"s [1964] model with 6 parameters.
+           
+        maxit: int, optional
+            Maximum number of iterations allowed during any time step.
+        tolth: float, optional
+            Absolute water content tolerance for nodes in the unsaturated part
+            of the flow region [-]. TolTh represents the maximum desired
+            absolute change in the value of the water content, θ, between
+            two successive iterations during a particular time step.
+        tolh: float, optional
+            Absolute pressure head tolerance for nodes in the saturated part of
+            the flow region [L] (its recommended value is 0.1 cm). TolH
+            represents the maximum desired absolute change in the value of the
+            pressure head, h, between two successive iterations during a
+            particular time step.
+        ha: float, optional
+            Absolute value of the upper limit [L] of the pressure head interval
+            below which a table of hydraulic properties will be generated
+            internally for each material.
+        hb: float, optional
+            Absolute value of the lower limit [L] of the pressure head interval
+            for which a table of hydraulic properties will be generated
+            internally for each material.
+        linitw: bool, optional
+            Set to -1 if the initial condition is given in terms of the
+            water content. Set to 1 if given in terms of pressure head.
+ 
+        """
+        
+        if self.water_flow is None:
+            self.water_flow = {
+                "MaxIt": maxit,  # Maximum No. of Iterations
+                "TolTh": tolth,  # [-]
+                "TolH": tolh,  # [L], default is 0.1 cm
+                "TopInf": True,
+                "KodTop": -1,
+                "lInitW": linitw,
+                "ha": ha,  # [L]
+                "hb": hb,  # [L]
+                "iModel": model,
+            }
+
+            self.basic_info["lWat"] = True
+        else:
+            raise Warning("Water flow was already provided. Please delete "
+                          "the old information first.")
+
+    def add_atmospheric_bc(self, atmosphere, hcrits=1e30, tatm=0,
+                           prec=0, rsoil=0, rroot=0, hcrita=1e5):
+        """
+        Method to add the atmospheric boundary condition to the model.
+
+        Parameters
+        ----------
+        atmosphere: pandas.DataFrame
+            Pandas DataFrame with at least the following columns: tAtm,
+            Prec, rSoil, rRoot, hCritA, rB, hB, hT, tTop, tBot, and Ampl.
+        hcrits: float, optional
+            Maximum allowed pressure head at the soil surface [L]. Default is
+            1e+30.
+        tatm: float, optional
+            Time for which the i-th data record is provided [T].
+        prec: float, optional
+            Precipitation rate [LT-1] (in absolute value).
+        rsoil: float, optional
+            Potential evaporation rate [LT-1] (in absolute value). rSoil(i) is
+            interpreted as KodTop when a time variable Dirichlet or Neumann
+            boundary condition is specified.
+        rroot: float, optional
+            Potential transpiration rate [LT-1] (in absolute value).
+        hcrita: float, optional
+            Absolute value of the minimum allowed pressure head at the soil
+            surface [L].
+
+        Notes
+        -----
+        The index of the atmosphere DataFrame should be a RangeIndex with
+        integers.
+
+        """
+        if self.atmosphere_info is None:
+            self.atmosphere_info = {"hCritS": hcrits}
+        else:
+            raise Warning("Atmospheric information was already provided. "
+                          "Please delete the old information first through "
+                          "ml.del_atmosphere().")
+
+        data = {"tAtm": tatm, "Prec": prec, "rSoil": rsoil, "rRoot": rroot, "hCritA": hcrita}
+
+        self.atmosphere = DataFrame(data=data, index=atmosphere.index)
+        self.atmosphere.update(atmosphere)
+
+        # Enable atmosphere module
+        self.basic_info["AtmInf"] = True
+
+    def add_root_uptake(self, model=0, crootmax=0, omegac=0.5, p0=-10,
+                        p2h=-200, p2l=-800, p3=-8000, r2h=0.5, r2l=0.1,
+                        poptm=None, p50=-800, pexp=3, lsolred=False):
+        """
+        Method to add rootwater update modeule to the model.
+
+        Parameters
+        ----------
+        model: int, optional
+            Type of root water uptake stress response function. 0 = Feddes
+            et al. [1978]. 1 = S-shaped, van Genuchten [1987]
+        crootmax: float, optional
+            Maximum allowed concentration in the root solute uptake term for
+            the first solute [ML-3]. When the nodal concentration is lower than
+            cRootMax, all solute is taken up. When the nodal concentration
+            is higher than cRootMax, additional solute stays behind.
+        omegac: float, optional
+            Maximum allowed concentration in the root solute uptake term for
+            the last solute [ML-3].
+        p0: float, optional
+            Only used if model=0. Value of the pressure head, h1, below
+            which roots start to extract water from the soil.
+        p2h: float, optional
+            Only used if model=0. Value of the limiting pressure head, h3,
+            below which the roots cannot extract water at the maximum rate
+            (assuming a potential transpiration rate of r2H).
+        p2l: float, optional
+            Only used if model=0. As above, but for a potential transpiration
+            rate of r2L.
+        p3: float, optional
+            Only used if model=0. Value of the pressure head, h4, below which
+            root water uptake ceases (usually equal to the wilting point).
+        r2h: float, optional
+            Only used if model=0. Potential transpiration rate [LT-1]
+            (currently set at 0.5 cm/day).
+        r2l: float, optional
+            Only used if model=0. Potential transpiration rate [LT-1]
+            (currently set at 0.1 cm/day).
+        poptm: list, optional
+            Value of the pressure head, h2, below which roots start to extract
+            water at the maximum possible rate. The length of poptm should
+            equal the No. of materials.
+        p50: float, optioal
+            Only used if model=1. Value of the pressure head, h50, at which
+            the root water uptake is reduced by 50%. Default is -800cm.
+        pexp: float, optional
+            Only used if model=1. Exponent, p, in the S-shaped root water
+            uptake stress response function. Default value is 3.
+        lsolred: bool, optional
+            Set to True if root water uptake is reduced due to salinity.
+            NOT IMPLEMENTED YET.
+
+        """
+        # Number of pressure heads should equal the number of materials.
+        if poptm:
+            if len(poptm) != self.n_materials:
+                raise Warning("Length of pressure heads poptm does not "
+                              "equal the number of materials!")
+        if lsolred:
+            raise Warning("Reduced water uptake due to salinity is not "
+                          "implemented yet..")
+
+        if self.root_uptake is None:
+            self.root_uptake = {
+                "iMoSink": model,
+                "cRootMax": crootmax,
+                "OmegaC": omegac,
+                "POptm": poptm,
+            }
+            if model == 0:
+                self.root_uptake["P0"] = p0
+                self.root_uptake["P2H"] = p2h
+                self.root_uptake["P2L"] = p2l
+                self.root_uptake["P3"] = p3
+                self.root_uptake["r2H"] = r2h
+                self.root_uptake["r2L"] = r2l
+            elif model == 1:
+                self.root_uptake["P50"] = p50
+                self.root_uptake["P3"] = pexp
+
+            self.basic_info["lSink"] = True
+        else:
+            msg = "Root water uptake model is already present in the model." \
+                  " Remove the old root water uptake model first using " \
+                  "ml.del_root_water_uptake()"
+            raise InterruptedError(msg)
+
+
+    def add_time_info(self, tinit=0, tmax=1, dt=0.01, dtmin=1e-5, dtmax=5,
+                      print_times=False, printinit=None, printmax=None,
+                      dtprint=None, nsteps=None, from_atmo=False,
+                      print_array=None):
+        """
+        Method to produce time information.
+
+        Parameters
+        ----------
+        tinit: int, optional
+            Initial time of the simulation [T].
+        tmax: int, optional
+            Final time of the simulation [T].
+        print_times: boolean, optional
+            Set to True. if information of pressure head, water contents,
+            temperatures, and concentrations in observation nodes, and
+            the water and solute fluxes is to be printed at a constant
+            time interval of 1 time unit.
+        printinit: int, optional
+            First specified print-time [T].
+        printmax:int, optional
+            Last specified print-time [T].
+        dtprint: int, optional
+            Specified time increment for print times [T].
+        nsteps: str, optional
+            Number of required time steps between the first specified
+            print-time (printinit) and the final specified
+            print-time (printmax)".
+        from_atmo: boolean, optional.
+            Set to True if time information is determined from the
+            atmospheric boundary condition input data.
+        dt: float, optional
+            Initial time increment [T].
+        dtmin: float, optional
+            Minimum permitted time increment [T].
+        dtmax: float, optional
+            Maximum permitted time increment [T].
+        print_array: array of float, optional
+            Array of specified print-times.
+
+        """
+
+        self.time_info = {"dt": dt, "dtMin": dtmin, "dtMax": dtmax,
+                          "dMul": 1.3, "dMul2": 0.7, "ItMin": 3, "ItMax": 7,
+                          "MPL": None, "tInit": tinit, "tMax": tmax,
+                          "lPrint": print_times, "nPrintSteps": 1,
+                          "tPrintInterval": 1, "lEnter": False,
+                          "TPrint(1)": None, "TPrint(MPL)": None}
+
+        if print_array is not None:
+            self.time_info["MPL"] = len(print_array)
+            self.times = print_array
+            return self.times
+        if from_atmo:
+            if self.atmosphere is None:
+                raise Warning("Atmospheric information not provided. Please "
+                              "provide atmosheric information through: "
+                              "ml.add_atmospheric_bc().")
+            if isinstance(self.atmosphere.index, DatetimeIndex):
+                times = self.atmosphere.index.dayofyear
+            else:
+                times = self.atmosphere.index
+            self.time_info["tInit"] = times[0]
+            self.time_info["tMax"] = times[-1]
+            self.times = times[1:-1]
+        else:
+            if print_times:
+                if printinit is None:
+                    printinit = tinit
+                if printmax is None:
+                    printmax = tmax
+                if nsteps is None:
+                    times = arange(printinit, printmax, step=dtprint)
+                else:
+                    times = linspace(printinit, printmax, num=nsteps + 1)
+                if printinit == tinit:
+                    self.times = times[1:]
+                else:
+                    self.times = times
+                self.time_info["MPL"] = len(self.times)
+            else:
+                self.time_info["MPL"] = 1
+                self.times = [self.time_info["tMax"]]
+        return self.times
+
+    def simulate(self):
+        """Method to call the Hydrus-1D executable."""
+        # Remove old Error.msg file
+        if os.path.exists(os.path.join(self.ws_name, "Error.msg")):
+            self.logger.info("Old 'Error.msg' file removed.")
+            os.remove(os.path.join(self.ws_name, "Error.msg"))
+
+        # Run Hydrus executable.
+        cmd = [self.exe_name, self.ws_name, "-1"]
+        result = run(cmd)
+
+        # Provide the user with some feedback about the simulation
+        if result.returncode == 0:
+            self.logger.info("Hydrus-1D Simulation Successful.")
+        else:
+            self.logger.warning("Hydrus-1D Simulation Unsuccessful.")
+        return result
+
+    def read_profile(self, fname="PROFILE.OUT"):
+        path = os.path.join(self.ws_name, fname)
+        data = read_profile(path=path)
+        return data
+
+    def read_nod_inf(self, fname="NOD_INF.OUT", times=None):
+        path = os.path.join(self.ws_name, fname)
+        data = read_nod_inf(path=path, times=times)
+        return data
+
+    def read_run_inf(self, fname="RUN_INF.OUT", usecols=None):
+        path = os.path.join(self.ws_name, fname)
+
+        if usecols is None:
+            usecols = ["TLevel", "Time", "dt", "Iter", "ItCum", "KodT",
+                       "KodB", "Convergency", ]
+            if self.solute_transport is not None:
+                usecols.append("IterC")
+
+        data = read_run_inf(path, usecols=usecols)
+        return data
+
+    def read_balance(self, fname="BALANCE.OUT", usecols=None):
+        path = os.path.join(self.ws_name, fname)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File {path} has not been found.")
+
+        if usecols is None:
+            usecols = ["Area", "W-volume", "In-flow", "h Mean", "Top Flux",
+                       "Bot Flux", "WatBalT", "WatBalR"]
+            if self.solute_transport is not None:
+                usecols += ["ConcVol", "ConcVolIm", "cMean", "CncBalT",
+                            "CncBalR"]
+
+            if self.heat_transport is not None:
+                usecols += ["TVol", "TMean"]
+
+            if self.CO2Transport is not None:
+                usecols += ["COVol", "COMean", "CO2BalT", "CncBalT"]
+
+            if self.water_flow["iModel"] in [5, 6, 7]:
+                usecols += ["W-VolumeI", "cMeanIm"]
+
+        data = read_balance(path=path, usecols=usecols)
+
+        return data
+
+    def read_obs_node(self, fname="OBS_NODE.OUT", nodes=None, conc=False,
+                      cols=None):
+        path = os.path.join(self.ws_name, fname)
+        if self.basic_info["lChem"]:
+            conc = True
+        if nodes is None:
+            nodes = self.obs_nodes
+
+        data = read_obs_node(path=path, nodes=nodes, conc=conc, cols=cols)
+        return data
+
+    def read_i_check(self, fname="I_CHECK.OUT"):
+        path = os.path.join(self.ws_name, fname)
+
+        data = read_i_check(path)
+        return data
+
+    def read_tlevel(self, fname="T_LEVEL.OUT", usecols=None):
+        path = os.path.join(self.ws_name, fname)
+
+        if usecols is None:
+            usecols = ["Time", "rTop", "rRoot", "vTop", "vRoot", "vBot",
+                       "sum(rTop)", "sum(rRoot)", "sum(vTop)", "sum(vRoot)",
+                       "sum(vBot)", "hTop", "hRoot", "hBot", "RunOff",
+                       "Volume"]
+
+            if self.water_flow["iModel"] > 4:
+                usecols.append("Cum(WTrans)")
+            if self.basic_info["lSnow"]:
+                usecols.append("SnowLayer")
+
+        data = read_tlevel(path=path, usecols=usecols)
+
+        return data
+
+    def read_alevel(self, fname="A_LEVEL.OUT", usecols=None):
+        path = os.path.join(self.ws_name, fname)
+        data = read_alevel(path=path, usecols=usecols)
+        return data
+
+
+    def get_empty_material_df(self, n=1):
+        """
+        Get an empty DataFrame with the soil parameters as columns.
+
+        Parameters
+        ----------
+        n: int, optional
+            Number of materials to add.
+
+        return
+        ----------
+        pandas.DataFrame
+            Pandas DataFrame with the soil parameters as columns.
+
+        Examples
+        --------
+
+        >>> m = ml.get_empty_material_df(n=2)
+        >>> m.loc[1:2] = [[0.08, 0.3421, 0.03, 5, 1, -0.5],
+        >>>               [0.08, 0.3421, 0.03, 5, 0.1, -0.5]]
+        >>> ml.add_material(m)
+
+
+        """
+        models = {
+            0: ["thr", "ths", "Alfa", "n", "Ks", "l"],
+            1: ["thr", "ths", "Alfa", "n", "Ks", "l"],
+            2: ["thr", "ths", "Alfa", "n", "Ks", "l"]}
+
+        level2 = models[self.water_flow["iModel"]]
+        level1 = ["water"] * len(level2)
+
+        columns = MultiIndex.from_arrays([level1, level2])
+
+        return DataFrame(columns=columns, index=arange(1, n + 1),
+                         data=0, dtype=float)
+          
+
+    def write_uns(self, fname="ex1.UNS", verbose=True, solute_transport=False, npunsp=1, nunsfop=1, iunscfb=0, iunsfpr=0, 
+                  zone_each=True, cells=1, propr=1, proinf=-1, print_times=0):
+        """
+        Method to write the .UNS file
+        """
+        lines = ["# HYDRUS MODFLOW", "\n"]
+        
+        lines.append("  ".join(["# Solute Transport (waarschijnlijk)", "\n"]))
+        lines.append("".join(["f", "\n"])) #aanpassen
+
+        lines.append("".join(["# ", "-"*40, "\n"]))
+
+        lines.append("  ".join(["# BASIC HYDRUS MODEL SETUP ", "\n"]))
+        lines.append("".join(["#", "\n"]))
+
+        lines.append("  ".join(["# NPUnsp", "NUnsfOp", "IUnsfCB", "IUnsfPr", "\n"]))
+        lines.append("  ".join([f"{npunsp}", f"{nunsfop}", f"{iunscfb}", f"{iunsfpr}", "\n"]))
+
+        lines.append("  ".join(["# NMat", "MaxNP", "MaxAtm", "\n"]))
+        lines.append("  ".join([f"{self.materials.index.size}", f"{self.profile.index.size}", f"{self.atmosphere.index.size}", "\n"]))
+
+        lines.append("  ".join(["# Zonarr", "\n"]))
+        if zone_each==True:
+            lines.append("".join(["EACH", "\n"]))
+        else:
+            lines.append("".join(["ZONE1", "\n"]))
+
+            # var_list_zn = []
+            # for i in range(cells):
+            #     var_list_zn.append(f"ZONE{i+1}")
+            # lines.append("  ".join(f"{var}" for var in var_list_zn))
+            # lines.append("\n")
+            
+        lines.append("  ".join(["# MaxIt", "TolTh", "TolH", "\n"]))
+        lines.append("  ".join([f"{self.water_flow['MaxIt']}", f"{self.water_flow['TolTh']}", f"{self.water_flow['TolH']}", "\n"]))
+
+        lines.append("  ".join(["# dt", "dtMin", "dtMax", "DMul", "DMul2", "ItMin", "ItMax", "\n"]))
+        lines.append("  ".join([f"{self.time_info['dt']}", f"{self.time_info['dtMin']}", f"{self.time_info['dtMax']}", 
+                                f"{self.time_info['dMul']}",  f"{self.time_info['dMul2']}", 
+                                f"{self.time_info['ItMin']}", f"{self.time_info['ItMax']}","\n"]))
+
+        lines.append("  ".join(["# hTab1", "hTabN", "iModel",  "\n"]))
+        lines.append("  ".join([f"{self.water_flow['ha']}", f"{self.water_flow['hb']}", f"{self.water_flow['iModel']}", "\n"]))
+        
+        lines.append("  ".join(["# thr", "ths", "alpha", "n", "Ks", "l", "\n"]))
+        lines.append("".join([f"{self.materials.to_string(index=False,header=False)}", "\n"]))
+
+        lines.append("  ".join(["# ProPr (equal to number of print times)", "\n"]))
+        lines.append("  ".join([f"{propr}", "\n"]))
+
+        lines.append("  ".join(["# ProInf (1=WC, -1=h)", "\n"]))
+        lines.append("  ".join([f"{proinf}", "\n"]))
+
+        lines.append("  ".join(["# Print times (must be repeated ProPr times)", "\n"]))
+        lines.append("".join([f"{print_times}", "\n"]))
+
+        lines.append("".join(["# ", "-"*40, "\n"]))
+
+        lines.append("  ".join(["# PROFILE AND INITIAL CONDITONS", "\n"]))
+        for i in range(cells):
+            lines.append("".join(["# ", "\n"]))
+            lines.append("".join([f"# Profile {i+1}", "\n"]))
+            lines.append("".join(["# ", "\n"]))
+
+            lines.append("  ".join(["# IZ", "\n"]))
+            if zone_each==True:
+                lines.append("  ".join(["# NVT", "\n"]))
+            else:
+                lines.append("".join([f"{i+1}", "\n"]))
+            
+            lines.append("  ".join(["# SinkF", "WLayer", "lInitW", "NOMAT", "\n"]))
+            var_list = []
+            if self.root_uptake: # check if root uptake takes plase
+                var_list.append(1)
+                vars_list_ru = []
+                if self.root_uptake["iMoSink"] == 0:
+                    vars_list_ru.append(["P0", "P2H", "P2L", "P3", "r2H", "r2L", "\n"])
+                elif self.root_uptake["iMoSink"] == 1:
+                    vars_list_ru.append(["P50", "P3", "\n"])
+            
+            if self.atmosphere_info['hCritS'] > 0: # water accumulation at surface
+                var_list.append(1)
+            else:
+                var_list.append(-1)
+            var_list.append(self.water_flow['lInitW']) # initial condition flag
+            var_list.append(self.materials.index.size) # number of soil materials
+    
+            lines.append("  ".join(f"{var}" for var in var_list))
+            lines.append("\n")        
+                  
+            lines.append("  ".join(["# NumNP", "\n"]))
+            lines.append("".join([f"{self.profile.index.size}", "\n"]))
+    
+            lines.append("    ".join(["# N", "Z", "h", "Mat", "Beta", "\n"]))
+            lines.append("".join([self.profile.drop(['Lay', 'Axz', 'Bxz', 'Dxz', 'Temp', 'Conc', 'SConc'], axis=1).to_string(header=False), "\n"]))
+            lines.append("".join(["#", "\n"]))
+    
+                    
+            lines.append("  ".join(["# ROOT UPTAKE", "\n"]))
+    
+            lines.append("  ".join(["# P0", "P2H", "P2L", "P3", "r2H", "r2L", "\n"]))
+            for variables in vars_list_ru:
+                lines.append("  ".join(f"{self.root_uptake[var]}" for var in variables[:-1]))
+            lines.append("\n")
+            
+            lines.append("  ".join(["# POptm(1)", "'till", "POptm(NMat)", "\n"]))
+            lines.append("    ".join(f"{p}" for p in self.root_uptake["POptm"]))
+            lines.append("".join(["\n"]))
+            lines.append("".join(["#", "\n"]))
+            lines.append("".join(["# ", "-"*20, "\n"]))
+
+        lines.append("".join(["# ", "-"*40, "\n"]))
+        lines.append("  ".join(["# ATMOSPHERE", "\n"]))
+        lines.append("".join(["#", "\n"]))
+
+        lines.append("  ".join(["# MaxAL", "hCritS", "\n"]))
+        lines.append("  ".join([f"{self.atmosphere.index.size}", f"{self.atmosphere_info['hCritS']}", "\n"]))
+        
+        lines.append("  ".join(["# tAtm", "Prec", "rSoil", "rRoot", "hCritA" "\n"]))
+        lines.append(self.atmosphere.to_string(header=False, index=False))
+
+        fname = os.path.join(self.ws_name, fname)
+        with open(fname, "w") as file:
+            file.writelines(lines)
+
+        if not verbose:
+            print("Successfully wrote {}".format(fname))
+            
+# Copy all the docstrings from the read methods
+Model_OWHM.read_profile.__doc__ = "{}".format(read_profile.__doc__)
+Model_OWHM.read_nod_inf.__doc__ = "{}".format(read_nod_inf.__doc__)
+Model_OWHM.read_run_inf.__doc__ = "{}".format(read_run_inf.__doc__)
+Model_OWHM.read_balance.__doc__ = "{}".format(read_balance.__doc__)
+Model_OWHM.read_obs_node.__doc__ = "{}".format(read_obs_node.__doc__)
+Model_OWHM.read_i_check.__doc__ = "{}".format(read_i_check.__doc__)
+Model_OWHM.read_tlevel.__doc__ = "{}".format(read_tlevel.__doc__)
+Model_OWHM.read_alevel.__doc__ = "{}".format(read_alevel.__doc__)
