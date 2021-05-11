@@ -3,8 +3,9 @@
 """
 
 import os
-from subprocess import run
+from subprocess import run, Popen, PIPE
 from logging import getLogger
+import sys
 
 import numpy as np
 from numpy import arange, linspace
@@ -14,7 +15,6 @@ from .plot import Plots
 from .read import read_profile, read_nod_inf, read_run_inf, read_tlevel, \
     read_balance, read_i_check, read_obs_node, read_solute, read_alevel
 from .version import __version__
-
 
 class Model:
     """
@@ -2054,23 +2054,45 @@ class Model_OWHM:
                 self.times = [self.time_info["tMax"]]
         return self.times
 
-    def simulate(self):
-        """Method to call the Hydrus-1D executable."""
-        # Remove old Error.msg file
-        if os.path.exists(os.path.join(self.ws_name, "Error.msg")):
-            self.logger.info("Old 'Error.msg' file removed.")
-            os.remove(os.path.join(self.ws_name, "Error.msg"))
+    def simulate(self, nam_name):
+        pth = self.ws_name
+        # pth = self.exe_name
+        # filepath=f'{pth}{nam_name}'
+        # filepath='C:\\Users\\vonkm\\Documents\\MScThesis\\Scripts\\ModFlow\\HYDMOD_OWHM\\Try_03\\run.bat'
+       
+        p = Popen(f"{nam_name}", cwd=f"{pth}", shell=True)
+        stdout, stderr = p.communicate()
+        return print([stdout, stderr]) 
+        
+        # import subprocess
+        # proc = subprocess.run([f'{filepath}'], stdout=subprocess.PIPE, universal_newlines=True)
+        # return print(proc.stdout)
 
-        # Run Hydrus executable.
-        cmd = [self.exe_name, self.ws_name, "-1"]
-        result = run(cmd)
-
-        # Provide the user with some feedback about the simulation
-        if result.returncode == 0:
-            self.logger.info("Hydrus-1D Simulation Successful.")
-        else:
-            self.logger.warning("Hydrus-1D Simulation Unsuccessful.")
-        return result
+        # FROM MODFLOW
+        # import sys
+        # pth = self.ws_name
+        # exe_name = self.exe_name
+        # proc = Popen([exe_name, "nam_name"], stdout=PIPE, cwd=pth)
+        # sys.stdout.write("  running {} in {}\n".format(exe_name, pth))
+        # success = False
+        # buff = []
+        # elt = "Normal model termination did not occur"
+        # while True:
+        #     line = proc.stdout.readline()
+        #     c = line.decode("utf-8")
+        #     if c != "":
+        #         if "normal termination of simulation" in c.lower():
+        #             success = True
+        #         c = c.rstrip("\r\n")
+        #         buff.append(c)
+        #     else:
+        #         break
+        # if success:
+        #     try:
+        #         elt = buff[-3].strip()
+        #     except:
+        #         pass
+        # return [success, elt]
 
     def read_profile(self, fname="PROFILE.OUT"):
         path = os.path.join(self.ws_name, fname)
@@ -2198,15 +2220,18 @@ class Model_OWHM:
                          data=0, dtype=float)
           
 
-    def write_uns(self, fname="ex1.UNS", verbose=True, solute_transport=False, npunsp=1, nunsfop=1, iunscfb=0, iunsfpr=0, 
-                  zone_each=True, cells=1, propr=1, proinf=-1, print_times=0):
+    def write_uns(self, fname="ex1", verbose=True, solute_transport=False, npunsp=1, nunsfop=1, iunsfcb=0, iunsfpr=0, 
+                  cells=1, propr=1, proinf=-1, print_times=0):
         """
         Method to write the .UNS file
         """
         lines = ["# HYDRUS MODFLOW", "\n"]
         
         lines.append("  ".join(["# Solute Transport (waarschijnlijk)", "\n"]))
-        lines.append("".join(["f", "\n"])) #aanpassen
+        if solute_transport==False:
+            lines.append("".join(["f", "\n"]))
+        else:
+            lines.append("".join("T", "\n"))
 
         lines.append("".join(["# ", "-"*40, "\n"]))
 
@@ -2214,22 +2239,28 @@ class Model_OWHM:
         lines.append("".join(["#", "\n"]))
 
         lines.append("  ".join(["# NPUnsp", "NUnsfOp", "IUnsfCB", "IUnsfPr", "\n"]))
-        lines.append("  ".join([f"{npunsp}", f"{nunsfop}", f"{iunscfb}", f"{iunsfpr}", "\n"]))
+        lines.append("  ".join([f"{npunsp}", f"{nunsfop}", f"{iunsfcb}", f"{iunsfpr}", "\n"]))
 
         lines.append("  ".join(["# NMat", "MaxNP", "MaxAtm", "\n"]))
         lines.append("  ".join([f"{self.materials.index.size}", f"{self.profile.index.size}", f"{self.atmosphere.index.size}", "\n"]))
 
         lines.append("  ".join(["# Zonarr", "\n"]))
-        if zone_each==True:
-            lines.append("".join(["EACH", "\n"]))
-        else:
-            lines.append("".join(["ZONE1", "\n"]))
+        lines.append("".join(["ZONE1", "\n"]))
 
-            # var_list_zn = []
-            # for i in range(cells):
-            #     var_list_zn.append(f"ZONE{i+1}")
-            # lines.append("  ".join(f"{var}" for var in var_list_zn))
-            # lines.append("\n")
+        if cells > 1: #write .zon file for 1 zone with multiple cells
+            lines_zon = ["1 #NZN(no. of Zone Arrays)", "\n"]
+            lines_zon.append("".join(["ZONE1", "\n"] ))
+            lines_zon.append("".join(["INTERNAL 1 (free) 0   #IZON(Zone Array)", "\n"]))
+            lines_zon.append("  ".join(f"{i+1}" for i in range(cells)))
+        else:
+            lines_zon = ["1 #NZN(no. of Zone Arrays)", "\n"]
+            lines_zon.append("".join(["ZONE1", "\n"]))
+            lines_zon.append("".join(["CONSTANT 1	    #IZON(Zone Array)", "\n"]))
+        fname_zon = os.path.join(self.ws_name, f"{fname}.zon")
+        with open(fname_zon, "w") as file:
+            file.writelines(lines_zon)
+            if verbose == True:
+                print("Successfully wrote {}".format(fname_zon))
             
         lines.append("  ".join(["# MaxIt", "TolTh", "TolH", "\n"]))
         lines.append("  ".join([f"{self.water_flow['MaxIt']}", f"{self.water_flow['TolTh']}", f"{self.water_flow['TolH']}", "\n"]))
@@ -2243,7 +2274,7 @@ class Model_OWHM:
         lines.append("  ".join([f"{self.water_flow['ha']}", f"{self.water_flow['hb']}", f"{self.water_flow['iModel']}", "\n"]))
         
         lines.append("  ".join(["# thr", "ths", "alpha", "n", "Ks", "l", "\n"]))
-        lines.append("".join([f"{self.materials.to_string(index=False,header=False)}", "\n"]))
+        lines.append("".join([f"{self.materials.to_string(index=False, header=False)}", "\n"]))
 
         lines.append("  ".join(["# ProPr (equal to number of print times)", "\n"]))
         lines.append("  ".join([f"{propr}", "\n"]))
@@ -2262,11 +2293,8 @@ class Model_OWHM:
             lines.append("".join([f"# Profile {i+1}", "\n"]))
             lines.append("".join(["# ", "\n"]))
 
-            lines.append("  ".join(["# IZ", "\n"]))
-            if zone_each==True:
-                lines.append("  ".join(["# NVT", "\n"]))
-            else:
-                lines.append("".join([f"{i+1}", "\n"]))
+            lines.append("  ".join(["# IZ Zone Number", "\n"]))
+            lines.append("".join([f"{i+1}", "\n"]))
             
             lines.append("  ".join(["# SinkF", "WLayer", "lInitW", "NOMAT", "\n"]))
             var_list = []
@@ -2277,7 +2305,8 @@ class Model_OWHM:
                     vars_list_ru.append(["P0", "P2H", "P2L", "P3", "r2H", "r2L", "\n"])
                 elif self.root_uptake["iMoSink"] == 1:
                     vars_list_ru.append(["P50", "P3", "\n"])
-            
+            else:
+                var_list.append(-1)
             if self.atmosphere_info['hCritS'] > 0: # water accumulation at surface
                 var_list.append(1)
             else:
@@ -2299,31 +2328,31 @@ class Model_OWHM:
             lines.append("  ".join(["# ROOT UPTAKE", "\n"]))
     
             lines.append("  ".join(["# P0", "P2H", "P2L", "P3", "r2H", "r2L", "\n"]))
-            for variables in vars_list_ru:
-                lines.append("  ".join(f"{self.root_uptake[var]}" for var in variables[:-1]))
-            lines.append("\n")
+            if self.root_uptake:
+                for variables in vars_list_ru:
+                    lines.append("  ".join(f"{self.root_uptake[var]}" for var in variables[:-1]))
+                    lines.append("\n")
             
-            lines.append("  ".join(["# POptm(1)", "'till", "POptm(NMat)", "\n"]))
-            lines.append("    ".join(f"{p}" for p in self.root_uptake["POptm"]))
-            lines.append("".join(["\n"]))
+                lines.append("  ".join(["# POptm(1)", "'till", "POptm(NMat)", "\n"]))
+                lines.append("    ".join(f"{p}" for p in self.root_uptake["POptm"]))
+                lines.append("".join(["\n"]))
             lines.append("".join(["#", "\n"]))
             lines.append("".join(["# ", "-"*20, "\n"]))
 
-        lines.append("".join(["# ", "-"*40, "\n"]))
-        lines.append("  ".join(["# ATMOSPHERE", "\n"]))
-        lines.append("".join(["#", "\n"]))
+            lines.append("  ".join([f"# ATMOSPHERE FOR PROFILE {i+1}", "\n"]))
+            lines.append("".join(["#", "\n"]))
+    
+            lines.append("  ".join(["# MaxAL", "hCritS", "\n"]))
+            lines.append("  ".join([f"{self.atmosphere.index.size}", f"{self.atmosphere_info['hCritS']}", "\n"]))
+            
+            lines.append("  ".join(["# tAtm", "Prec", "rSoil", "rRoot", "hCritA" "\n"]))
+            lines.append(self.atmosphere.to_string(header=False, index=False))
+            lines.append("".join(["\n"]))
 
-        lines.append("  ".join(["# MaxAL", "hCritS", "\n"]))
-        lines.append("  ".join([f"{self.atmosphere.index.size}", f"{self.atmosphere_info['hCritS']}", "\n"]))
-        
-        lines.append("  ".join(["# tAtm", "Prec", "rSoil", "rRoot", "hCritA" "\n"]))
-        lines.append(self.atmosphere.to_string(header=False, index=False))
-
-        fname = os.path.join(self.ws_name, fname)
+        fname = os.path.join(self.ws_name, f"{fname}.uns")
         with open(fname, "w") as file:
             file.writelines(lines)
-
-        if not verbose:
+        if verbose == True:
             print("Successfully wrote {}".format(fname))
             
 # Copy all the docstrings from the read methods
