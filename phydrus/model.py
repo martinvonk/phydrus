@@ -1784,9 +1784,10 @@ class Model_OWHM:
         model: int, optional
             Soil hydraulic properties model:
             0 = van Genuchten"s [1980] model with 6 parameters.
-             1 = van Genuchten"s [1980] model with air-entry value of -2 cm
-            and with 6 parameters.
+            1 = bugs do not use
             2 = Brooks and Corey"s [1964] model with 6 parameters.
+            3 = van Genuchten"s [1980] model with air-entry value of -2 cm
+            and with 6 parameters.
            
         maxit: int, optional
             Maximum number of iterations allowed during any time step.
@@ -2054,15 +2055,19 @@ class Model_OWHM:
                 self.times = [self.time_info["tMax"]]
         return self.times
 
-    def simulate(self, nam_name):
+    def simulate(self, nam_name, pipe=True):
         pth = self.ws_name
         # pth = self.exe_name
         # filepath=f'{pth}{nam_name}'
         # filepath='C:\\Users\\vonkm\\Documents\\MScThesis\\Scripts\\ModFlow\\HYDMOD_OWHM\\Try_03\\run.bat'
-       
-        p = Popen(f"{nam_name}", cwd=f"{pth}", shell=True)
-        stdout, stderr = p.communicate()
-        return print([stdout, stderr]) 
+        if pipe==True:
+            p = Popen(f"{nam_name}", cwd=f"{pth}", stdout = PIPE, shell=True)
+            stdout, stderr = p.communicate()
+            return stdout
+        else:
+            p = Popen(f"{nam_name}", cwd=f"{pth}", shell=True)
+            stdout, stderr = p.communicate()
+            return stdout
         
         # import subprocess
         # proc = subprocess.run([f'{filepath}'], stdout=subprocess.PIPE, universal_newlines=True)
@@ -2181,7 +2186,6 @@ class Model_OWHM:
         data = read_alevel(path=path, usecols=usecols)
         return data
 
-
     def get_empty_material_df(self, n=1):
         """
         Get an empty DataFrame with the soil parameters as columns.
@@ -2208,8 +2212,10 @@ class Model_OWHM:
         """
         models = {
             0: ["thr", "ths", "Alfa", "n", "Ks", "l"],
-            1: ["thr", "ths", "Alfa", "n", "Ks", "l"],
-            2: ["thr", "ths", "Alfa", "n", "Ks", "l"]}
+            1: ["thr", "ths", "Alfa", "n", "Ks", "l", "thm", "tha", "thk",
+                "Kk"],
+            2: ["thr", "ths", "Alfa", "n", "Ks", "l"],
+            3: ["thr", "ths", "Alfa", "n", "Ks", "l"]}
 
         level2 = models[self.water_flow["iModel"]]
         level1 = ["water"] * len(level2)
@@ -2218,20 +2224,23 @@ class Model_OWHM:
 
         return DataFrame(columns=columns, index=arange(1, n + 1),
                          data=0, dtype=float)
-          
 
     def write_uns(self, fname="ex1", verbose=True, solute_transport=False, npunsp=1, nunsfop=1, iunsfcb=0, iunsfpr=0, 
-                  cells=1, propr=1, proinf=-1, print_times=0):
+                  cells=1, propr=1, proinf=-1, print_times=0, mf2000=False):
         """
         Method to write the .UNS file
         """
         lines = ["# HYDRUS MODFLOW", "\n"]
         
-        lines.append("  ".join(["# Solute Transport (waarschijnlijk)", "\n"]))
-        if solute_transport==False:
-            lines.append("".join(["f", "\n"]))
+        if mf2000==False:
+            lines.append("  ".join(["# Solute Transport (waarschijnlijk)", "\n"]))
+            if solute_transport==False:
+                lines.append("".join(["f", "\n"]))
+            else:
+                lines.append("".join("T", "\n"))
         else:
-            lines.append("".join("T", "\n"))
+            lines.append("  ".join(["# No Solute Transport in this version", "\n"]))
+
 
         lines.append("".join(["# ", "-"*40, "\n"]))
 
@@ -2255,7 +2264,7 @@ class Model_OWHM:
         else:
             lines_zon = ["1 #NZN(no. of Zone Arrays)", "\n"]
             lines_zon.append("".join(["ZONE1", "\n"]))
-            lines_zon.append("".join(["CONSTANT 1	    #IZON(Zone Array)", "\n"]))
+            lines_zon.append("".join(["CONSTANT 1    #IZON(Zone Array)", "\n"]))
         fname_zon = os.path.join(self.ws_name, f"{fname}.zon")
         with open(fname_zon, "w") as file:
             file.writelines(lines_zon)
@@ -2283,7 +2292,11 @@ class Model_OWHM:
         lines.append("  ".join([f"{proinf}", "\n"]))
 
         lines.append("  ".join(["# Print times (must be repeated ProPr times)", "\n"]))
-        lines.append("".join([f"{print_times}", "\n"]))
+        # for i in range(int(len(print_times) / 30) + 1):
+        #     lines.append("  ".join([f"{time}" for time in print_times[i * 30:i * 30 + 30]]))
+        #     lines.append("\n")
+        lines.append(" ".join([f"{time:0.2f}" for time in print_times]))
+        lines.append("\n")
 
         lines.append("".join(["# ", "-"*40, "\n"]))
 
@@ -2327,15 +2340,23 @@ class Model_OWHM:
                     
             lines.append("  ".join(["# ROOT UPTAKE", "\n"]))
     
-            lines.append("  ".join(["# P0", "P2H", "P2L", "P3", "r2H", "r2L", "\n"]))
             if self.root_uptake:
-                for variables in vars_list_ru:
-                    lines.append("  ".join(f"{self.root_uptake[var]}" for var in variables[:-1]))
-                    lines.append("\n")
-            
-                lines.append("  ".join(["# POptm(1)", "'till", "POptm(NMat)", "\n"]))
-                lines.append("    ".join(f"{p}" for p in self.root_uptake["POptm"]))
-                lines.append("".join(["\n"]))
+                if mf2000==False:
+                    lines.append("  ".join(["# P0", "P2H", "P2L", "P3", "r2H", "r2L", "\n"]))
+                    for variables in vars_list_ru:
+                        lines.append("  ".join(f"{self.root_uptake[var]}" for var in variables[:-1]))
+                        lines.append("\n")
+                
+                    lines.append("  ".join(["# POptm(1)", "'till", "POptm(NMat)", "\n"]))
+                    lines.append("    ".join(f"{p}" for p in self.root_uptake["POptm"]))
+                    lines.append("".join(["\n"]))
+                else:
+                    lines.append("  ".join(["# P0", "P2H", "P2L", "P3", "r2H", "r2L" "POptm", "\n"]))
+                    for variables in vars_list_ru:
+                        lines.append("  ".join(f"{self.root_uptake[var]}" for var in variables[:-1]))
+                        lines.append("  ".join(f"  {p}" for p in self.root_uptake["POptm"]))
+                        lines.append("\n")
+                
             lines.append("".join(["#", "\n"]))
             lines.append("".join(["# ", "-"*20, "\n"]))
 
