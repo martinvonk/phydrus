@@ -285,7 +285,7 @@ def create_nonlinear_profile(top=0, bot=-1, gwt_i=-100, dx_min=0.5, dx_max=1, r1
     data["Bxz"] = np.full(len(grid), ak)
     data["Dxz"] = np.full(len(grid), ath)
     data["Temp"] = np.full(len(grid), temp)
-    data["Beta"] = data.apply(lambda row: z_loop_vG(row["x"], top=top, bot=bot, Lr = rz), axis=1) #Hoffman and van Genuchten, 1983
+    data["Beta"] = data.apply(lambda row: z_loop_vG(row["x"], top=top, bot=depth, Lr = rz), axis=1) #Hoffman and van Genuchten, 1983
 #     data["Beta"] = data.apply(lambda row: z_loop_vG(row["x"], r1 = r1 r2 = r2), axis=1)
     data = data.replace(np.nan, "")
     print(f'Profile length: {len(data)}')
@@ -310,21 +310,21 @@ def partitioning_grass(P, ET, a=0.45, ch=5, k = 0.463, return_LAI=False):
     OUTPUT:
     Pnet - Net Precipitation (P - I) [cm]
     I - Interception [cm]
-    T - Potential Transpiration [cm]
-    Es - Potential Soil Evaporation [cm]
+    Et,p - Potential Transpiration [cm]
+    Es,p - Potential Soil Evaporation [cm]
     """
     
     LAI = 0.24 * ch
     SCF = 1 - np.exp(-k * LAI)
     I = a * LAI * (1 - 1 / (1 + SCF * P / (a * LAI)))
     Pnet = np.maximum(P - I, 0)
-    Tp = ET * SCF
-    Ep = ET * (1 - SCF)
-    print(SCF)
+    Etp = ET * SCF
+    Esp = ET * (1 - SCF)
+#     print(SCF)
     if return_LAI==True:
-        return Pnet, I, Tp, Ep, LAI
+        return Pnet, I, Etp, Esp, LAI
     else:
-        return Pnet, I, Tp, Ep
+        return Pnet, I, Etp, Esp
     
 def get_recharge(nodinf, recharge_depth):
     # recharge depth has to be negative
