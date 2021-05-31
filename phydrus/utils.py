@@ -331,9 +331,8 @@ def partitioning_grass(P, ET, a=0.45, ch=5, k = 0.463, return_LAI=False):
     Pnet = np.maximum(P - I, 0)
     Etp = ET * SCF
     Esp = ET * (1 - SCF)
-#     print(SCF)
-    if return_LAI==True:
-        return Pnet, I, Etp, Esp, LAI
+    if return_SCF==True:
+        return Pnet, I, Etp, Esp, SCF
     else:
         return Pnet, I, Etp, Esp
     
