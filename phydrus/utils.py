@@ -301,7 +301,7 @@ def create_nonlinear_profile(top=0, bot=-1, gwt_i=-100, dx_min=0.5, dx_max=1, r1
     print(f'Profile length: {len(data)}')
     return data
 
-def partitioning_grass(P, ET, a=0.45, ch=5, k = 0.463, return_LAI=False):
+def partitioning_grass(P, ET, a=0.45, ch=5, k = 0.463, return_SCF=False):
     
     """
     Partitioning according to equation 2.75 in the Manual v4.0 and 
