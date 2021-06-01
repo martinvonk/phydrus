@@ -2055,19 +2055,19 @@ class Model_OWHM:
                 self.times = [self.time_info["tMax"]]
         return self.times
 
-    def simulate(self, nam_name, pipe=True):
+    def simulate(self, nam_name, pipe=True, bat=False):
+        
         pth = self.ws_name
-        # pth = self.exe_name
-        # filepath=f'{pth}{nam_name}'
-        # filepath='C:\\Users\\vonkm\\Documents\\MScThesis\\Scripts\\ModFlow\\HYDMOD_OWHM\\Try_03\\run.bat'
-        if pipe==True:
-            p = Popen(f"{nam_name}", cwd=f"{pth}", stdout = PIPE, shell=True)
-            stdout, stderr = p.communicate()
-            return stdout
-        else:
-            p = Popen(f"{nam_name}", cwd=f"{pth}", shell=True)
-            stdout, stderr = p.communicate()
-            return stdout
+        
+        if bat==True:
+            if pipe==True:
+                p = Popen(f"{nam_name}", cwd=f"{pth}", stdout = PIPE, shell=True)
+                stdout, stderr = p.communicate()
+                return stdout
+            else:
+                p = Popen(f"{nam_name}", cwd=f"{pth}", shell=True)
+                stdout, stderr = p.communicate()
+                return stdout
         
         # import subprocess
         # proc = subprocess.run([f'{filepath}'], stdout=subprocess.PIPE, universal_newlines=True)
@@ -2075,9 +2075,13 @@ class Model_OWHM:
 
         # FROM MODFLOW
         # import sys
-        # pth = self.ws_name
-        # exe_name = self.exe_name
-        # proc = Popen([exe_name, "nam_name"], stdout=PIPE, cwd=pth)
+        else:
+            print('running')
+            exe_name = self.exe_name
+            p = Popen([exe_name, nam_name], cwd=f"{pth}", shell=True)
+            stdout, stderr = p.communicate()
+            return stdout
+
         # sys.stdout.write("  running {} in {}\n".format(exe_name, pth))
         # success = False
         # buff = []
