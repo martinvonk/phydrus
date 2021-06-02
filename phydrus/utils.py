@@ -270,8 +270,8 @@ def create_nonlinear_profile(top=0, bot=-1, gwt_i=-100, dx_min=0.5, dx_max=1, r1
     dx_2 = dx_1[-1] - np.cumsum(np.linspace(dx_min, dx_max, 40)) # increase step from dx_min to dx_max
     if depth >= dx_2[-1]:
         print(f'Depth should be lower than {dx_2[-1]}')
-    dx_3 = np.flip(np.arange(depth, dx_2[-1], dx_max)) # extend total length to with dx_max to total depth
-    grid = np.concatenate((dx_1, dx_2, dx_3)) # create total grid
+    dx_3 = np.arange(dx_2[-1]-dx_max, depth-dx_max, -dx_max) # extend total length to with dx_max to total depth
+    grid = np.round(np.concatenate((dx_1, dx_2, dx_3)), 6) # create total grid
     if np.max(np.diff(grid[1:])/np.diff(grid[1:])) > 1.5:
         print(f'The ratio of the sizes of two neighboring elements is not recommended to exceed about 1.5. Currently {np.max(np.diff(grid[1:])/np.diff(grid[1:]))}')
     if len(grid) > 900: #should not exceed 1000
