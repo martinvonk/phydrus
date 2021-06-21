@@ -197,11 +197,11 @@ def z_loop_vG(z, top=0, bot=-100, Lr = 20):
     z = np.asarray(z) - top
     top  = top - top
     if z > (top - 0.2 * Lr):
-        return (5 / 3) / Lr
+        return (5 / 3) / Lr * 0.1
     elif z < top - Lr:
         return 0
     else:
-        return (25 / 12) / Lr * (1 - (top - z / Lr))
+        return (25 / 12) / Lr * (1 - (top - z / Lr)) * 0.1
 
 def ihead(depth, elements, GWT):
     z = np.linspace(0, depth, elements+1, dtype=None)
@@ -308,9 +308,9 @@ def partitioning_grass(P, ET, a=0.45, ch=5, k = 0.463, return_SCF=False):
     Sutanto, Wenninger, Coenders and Uhlenbrook [2021]
     
     INPUT:
-    P - precipitation [cm]
-    ET - potential evapotranspiration Penman Monteith [cm]
-    a - constant [cm]
+    P - precipitation [mm]
+    ET - potential evapotranspiration Penman Monteith [mm]
+    a - constant (4.5) [mm]
     ch - cropheight (5-15 for clipped grass) [cm]
     k - radiation extinction by canopy (rExtinct) (0.463) [-]
     
@@ -319,18 +319,19 @@ def partitioning_grass(P, ET, a=0.45, ch=5, k = 0.463, return_SCF=False):
     SCF - Soil Cover Fraction (b) [-]
    
     OUTPUT:
-    Pnet - Net Precipitation (P - I) [cm]
-    I - Interception [cm]
-    Et,p - Potential Transpiration [cm]
-    Es,p - Potential Soil Evaporation [cm]
+    Pnet - Net Precipitation (P - I) [mm]
+    I - Interception [mm]
+    Et,p - Potential Transpiration [mm]
+    Es,p - Potential Soil Evaporation [mm]
     """
     
     LAI = 0.24 * ch
     SCF = 1 - np.exp(-k * LAI)
     I = a * LAI * (1 - 1 / (1 + SCF * P / (a * LAI)))
     Pnet = np.maximum(P - I, 0)
-    Etp = ET * SCF
-    Esp = ET * (1 - SCF)
+    Ep = np.maximum(ET - I, 0)
+    Etp = Ep * SCF
+    Esp = Ep * (1 - SCF)
     if return_SCF==True:
         return Pnet, I, Etp, Esp, SCF
     else:
