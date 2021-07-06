@@ -13,6 +13,7 @@ import pandas as pd
 
 from numpy import sqrt, log, cos, pi, sin, exp, maximum, clip
 
+from .read import read_profile
 # from .utils import extraterrestrial_r, daylight_hours, solar_declination, \
 #     day_of_year, relative_distance, sunset_angle, extraterrestrial_r_hour
 
@@ -244,7 +245,7 @@ def get_gwt(nodinf):
              with the column 'Depth' and 'Head'.
     OUTPUT:
     gwl - Numpy array with the location of the groundwater table.
-        """
+    """
     gwl = []
     for i in list(nodinf.keys()):
         j = 0
@@ -259,6 +260,30 @@ def get_gwt(nodinf):
             gwl_new = (0-nodinf[i]['Head'].iloc[idx-1])*(nodinf[i]['Depth'].iloc[idx]-nodinf[i]['Depth'].iloc[idx-1])/(nodinf[i]['Head'].iloc[idx]-nodinf[i]['Head'].iloc[idx-1]) + nodinf[i]['Depth'].iloc[idx-1]
         gwl.append(gwl_new)
     return np.array(gwl)
+
+def get_head(nodinf, path):
+    """
+    Extract the location of the groundwater head just above the bottom boundary resistance layer
+    
+    INPUT:
+    nodinf - Dictionary of the NOD_INF.OUT file with the timesteps as keys. 
+             The data in the dictionary contains a DataFrame for each timestep 
+             with the column 'Depth' and 'Head'.
+    OUTPUT:
+    head - Numpy array with the location of the groundwater table.
+    """
+    profile = read_profile(f'{path}/PROFILE.OUT')
+    row_id = 0
+    head = np.array([])
+    for j in range(len(profile)): #find where the Ks changes to find top clay layer
+        ks_low = profile.Ks.iloc[-1]
+        ks = np.flip(profile.Ks)
+        if ks.iloc[j] == ks_low:
+            row_id += 1
+        loc_idx = ks.index[row_id]
+    for i in range(len(nodinf)):
+        head = np.append(head, nodinf[i].Head.iloc[loc_idx] - profile.depth.loc[loc_idx + 1])
+    return head
 
 def create_nonlinear_profile(top=0, bot=-1, gwt_i=-100, dx_min=0.5, dx_max=1, r1=10, r2=20, lay=1, ah=1.0, ak=1.0, ath=1.0, temp=20.0, conc=None, sconc=None):
     if not isinstance(bot, list):
